@@ -1,9 +1,9 @@
-LUAGUI_NAME = "KH1FM Equipment Stats, Abilities, LIMIT and RISK v2"
+LUAGUI_NAME = "KH1FM Equipment Stats, Abilities, LIMIT and RISK v2.1"
 LUAGUI_AUTH = "OpenAI"
 LUAGUI_DESC = "One reversible Keyblade/accessory controller integrated with LIMIT v1.6."
 
 --[[
-    KH1FM EQUIPMENT STATS, ABILITIES, LIMIT AND RISK v2
+    KH1FM EQUIPMENT STATS, ABILITIES, LIMIT AND RISK v2.1
     Target: KINGDOM HEARTS FINAL MIX.exe, Steam Global 1.0.0.2
     SHA-256: d790746245d26159f3ee0e1060e33b2fa2de06941850a4ac724f598722884bac
     Runtime: LuaBackendHook v1.9.1-hook / LuaEngine v5.0
@@ -28,6 +28,13 @@ LUAGUI_DESC = "One reversible Keyblade/accessory controller integrated with LIMI
       * Every equipped Keyblade/accessory row can add signed HP, MP, STR, DEF,
         Fire/Ice/Lightning/Dark resistance, temporary Sora abilities, LIMIT,
         and RISK. Repeated accessories count once per equipped copy.
+      * KH1FM ability bytes use the low seven bits for the ability ID and the
+        high bit as the UNEQUIPPED flag. Equipment-granted abilities are
+        therefore written as their raw ID (for example, MP Haste is 0x17),
+        never ID+0x80 (MP Haste 0x97, present but unequipped).
+      * A v2 ownership ledger is migrated in place. Any ability v2 left in its
+        unequipped state is activated without stacking stats or losing the
+        byte that must be restored when the granting gear is removed.
       * LIMIT changes the +10 confirmed block/parry/deflect event. Values below
         -10 make the defensive event remove LIMIT instead of generating it.
       * RISK changes the base 5 LIMIT lost on damage. Values below -5 invert the
@@ -193,17 +200,13 @@ local KEYBLADES = {
     ["Lionheart"]        = GEAR({}),
     ["Metal Chocobo"]    = GEAR({}),
     ["Oathkeeper"] = GEAR({
-        HP = 0, MP = 20, STR = 77, DEF = 10, ICE_RESISTANCE = +100, LIMIT =-10, RISK=-50, ABILITIES = { "MP Haste" },
-    }),
-    ["Oblivion"]         = GEAR({
-
-    }),
-    ["Lady Luck"]        = GEAR({}),
-    ["Wishing Star"]     = GEAR({}),
-    ["Ultima Weapon"]    = GEAR({
-        HP = 0, MP = 20, STR = 90, DEF = 10,
+        HP = 100, MP = 20, STR = 4, DEF = 1, LIMIT =-20, RISK=+20, ICE_RESISTANCE =+100,
         ABILITIES = { "MP Haste" },
     }),
+    ["Oblivion"]         = GEAR({}),
+    ["Lady Luck"]        = GEAR({}),
+    ["Wishing Star"]     = GEAR({}),
+    ["Ultima Weapon"]    = GEAR({}),
     ["Diamond Dust"]     = GEAR({}),
     ["One-Winged Angel"] = GEAR({}),
 }
@@ -265,7 +268,7 @@ local ACCESSORIES = {
     ["Obsidian Ring"] = GEAR({}),
 }
 
-local PREFIX = "[EquipmentLimitRiskV2] "
+local PREFIX = "[EquipmentLimitRiskV2.1] "
 local MAX_LIMIT = 100
 local LIMIT_RESTORE_BASE = 10
 local LIMIT_LOSS_PER_HIT_BASE = 5
@@ -1569,6 +1572,29 @@ do
                 local address = SORA_CHARACTER_BASE_RVA
                     + CHARACTER_OFFSET.ABILITIES + ownership.slot
                 local current = safe_read_byte_relative(address)
+                -- V2 reversed KH1FM's high-bit convention and wrote the
+                -- unequipped form (ID+0x80). Migrate an exact still-owned
+                -- byte to the active raw ID before normal ownership checks.
+                if desired_abilities[ability_id] ~= nil
+                    and current == ownership.expected
+                    and ownership.expected == ability_id + 0x80 then
+                    local ok, reason = safe_write_byte_relative(
+                        address, ability_id
+                    )
+                    if not ok then return false, reason end
+                    ownership.expected = ability_id
+                    current = ability_id
+                    changed = true
+                    if CONFIG.LOG_ABILITY_CHANGES then
+                        log("ABILITY MIGRATED AND ACTIVATED: "
+                            .. (ABILITY_NAMES_BY_ID[ability_id]
+                                or tostring(ability_id))
+                            .. " changed from 0x"
+                            .. string.format("%02X", ability_id + 0x80)
+                            .. " to active byte 0x"
+                            .. string.format("%02X", ability_id) .. ".")
+                    end
+                end
                 if desired_abilities[ability_id] == nil
                     or current ~= ownership.expected then
                     local ok, reason = release_owned_ability(
@@ -1582,13 +1608,19 @@ do
         for ability_id, count in pairs(desired_abilities) do
             if count > 0
                 and gear_runtime.owned_abilities[ability_id] == nil then
-                local equipped = ability_id + 0x80
+                -- In KH1FM the raw ID is equipped/active. Adding 0x80 marks
+                -- the same list entry unequipped.
+                local equipped = ability_id
+                local unequipped = ability_id + 0x80
                 if find_ability_byte(equipped) == nil then
-                    local slot = find_ability_byte(0)
-                    local previous = 0
+                    -- Prefer enabling Sora's existing unequipped copy. If he
+                    -- has not learned it, create a temporary entry in a free
+                    -- slot. Both paths restore the exact previous byte.
+                    local slot = find_ability_byte(unequipped)
+                    local previous = unequipped
                     if slot == nil then
-                        slot = find_ability_byte(ability_id)
-                        previous = ability_id
+                        slot = find_ability_byte(0)
+                        previous = 0
                     end
                     if slot == nil then
                         log("ABILITY NOT GRANTED: no safe slot is available for "
@@ -1693,7 +1725,7 @@ do
                 .. "; equipment reload protection is unavailable.")
             return false
         end
-        file:write("version=2\nactive=1\nbuild=STEAM_GL\n")
+        file:write("version=3\nactive=1\nbuild=STEAM_GL\n")
         file:write("signature=", tostring(gear_runtime.signature or ""), "\n")
         file:write("level=", tostring(gear_runtime.level or 0), "\n")
         file:write("experience=", tostring(gear_runtime.experience or 0), "\n")
@@ -1733,7 +1765,7 @@ do
         if path == nil then return end
         local file = io.open(path, "w")
         if file ~= nil then
-            file:write("version=2\nactive=0\n")
+            file:write("version=3\nactive=0\n")
             file:close()
         end
     end

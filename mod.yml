@@ -1,16 +1,17 @@
-title: KH1FM Equipment Stats, Abilities, LIMIT and RISK (v2)
+title: KH1FM Equipment Stats, Abilities, LIMIT and RISK (v2.1)
 originalAuthor: Raven Fang
 description: >-
   One Steam Global Lua replacing Equipment Bonus v1.1 and LIMIT System v1.6.
   Gives every Keyblade and accessory editable HP, MP, STR, DEF, Fire, Ice,
   Lightning and Dark resistance, temporary Sora abilities, signed LIMIT gain,
   and signed RISK loss. Gear effects stack per equipped copy and are restored
-  through an ownership ledger when the gear is removed. Preserves the v1.6
-  LIMIT interface for the existing custom HUD and EnemyConfig companion.
+  through an ownership ledger when the gear is removed. V2.1 fixes KH1FM's
+  active-versus-unequipped ability-byte handling and migrates v2 state safely.
+  Preserves the v1.6 LIMIT interface for the existing HUD and EnemyConfig.
 game: kh1
 assets:
-  - name: scripts/ZZZZ_KH1FM_Equipment_Stats_Abilities_LIMIT_RISK_v2.lua
+  - name: scripts/ZZZZ_KH1FM_Equipment_Stats_Abilities_LIMIT_RISK_v2_1.lua
     platform: pc
     method: copy
     source:
-      - name: scripts/ZZZZ_KH1FM_Equipment_Stats_Abilities_LIMIT_RISK_v2.lua
+      - name: scripts/ZZZZ_KH1FM_Equipment_Stats_Abilities_LIMIT_RISK_v2_1.lua
