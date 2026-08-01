@@ -415,7 +415,16 @@ local KEYBLADES = {
 }
 
 local ACCESSORIES = {
-    ["Protect Chain"] = GEAR({}),
+    ["Protect Chain"] = GEAR({
+        HP = 1,
+        MP = 20,
+        STR = 4,
+        DEF = 1,
+        LIMIT = -15,
+        RISK = -15,
+        ICE_RESISTANCE = 100,
+        ABILITIES = { "MP Haste" },
+}),
     ["Protera Chain"] = GEAR({}),
     ["Protega Chain"] = GEAR({}),
     ["Fire Ring"] = GEAR({}),
