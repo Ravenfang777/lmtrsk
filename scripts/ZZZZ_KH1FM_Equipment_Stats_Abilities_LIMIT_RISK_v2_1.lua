@@ -184,7 +184,10 @@ local function GEAR(row)
 end
 
 local KEYBLADES = {
-    ["Kingdom Key"]      = GEAR({}),
+    ["Kingdom Key"]      = GEAR({
+        HP = 10, MP = 10, STR = 1, DEF = 1, LIMIT =+20, RISK=+20, ICE_RESISTANCE =+100,
+        ABILITIES = { "Counterattack" },
+}),
     ["Dream Sword"]      = GEAR({}),
     ["Dream Shield (Sora)"] = GEAR({}),
     ["Dream Rod (Sora)"] = GEAR({}),
@@ -200,7 +203,7 @@ local KEYBLADES = {
     ["Lionheart"]        = GEAR({}),
     ["Metal Chocobo"]    = GEAR({}),
     ["Oathkeeper"] = GEAR({
-        HP = 100, MP = 20, STR = 4, DEF = 1, LIMIT =-20, RISK=-20, ICE_RESISTANCE =+100,
+        HP = 20, MP = 20, STR = 4, DEF = 1, LIMIT =-20, RISK=-20, ICE_RESISTANCE =+100,
         ABILITIES = { "MP Haste" },
     }),
     ["Oblivion"]         = GEAR({}),
@@ -212,7 +215,10 @@ local KEYBLADES = {
 }
 
 local ACCESSORIES = {
-    ["Protect Chain"] = GEAR({}),
+    ["Protect Chain"] = GEAR({
+        HP = 10, MP = 20, STR = 4, DEF = 10, LIMIT =+80, RISK=+20, FIRE_RESISTANCE =+100,
+        ABILITIES = { "MP Haste" },
+}),
     ["Protera Chain"] = GEAR({}),
     ["Protega Chain"] = GEAR({}),
     ["Fire Ring"] = GEAR({}),
