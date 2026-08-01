@@ -403,14 +403,14 @@ local KEYBLADES = {
         ABILITIES = { "MP Haste" },
 }),
     ["One-Winged Angel"] = GEAR({
-        HP = 22,
-        MP = 20,
-        STR = 4,
-        DEF = 1,
+        HP = -10,
+        MP = -10,
+        STR = 99,
+        DEF = -10,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
-        ABILITIES = { "MP Haste" },
+        ABILITIES = { "Strike Raid" },
 }),
 }
 
