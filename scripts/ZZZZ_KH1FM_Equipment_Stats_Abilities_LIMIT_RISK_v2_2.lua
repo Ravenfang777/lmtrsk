@@ -207,7 +207,7 @@ local KEYBLADES = {
     ["Lionheart"]        = GEAR({}),
     ["Metal Chocobo"]    = GEAR({}),
     ["Oathkeeper"] = GEAR({
-        HP = 100, MP = 20, STR = 4, DEF = 1,
+        HP = 5, MP = 5, STR = 5, DEF = 5, ICE_RESISTANCE =+100, LIMIT =+20, RISK=+40
         ABILITIES = { "MP Haste" },
     }),
     ["Oblivion"]         = GEAR({}),
