@@ -3,7 +3,7 @@ LUAGUI_AUTH = "OpenAI"
 LUAGUI_DESC = "One reversible Keyblade/accessory controller integrated with LIMIT v1.6."
 
 --[[
-    KH1FM EQUIPMENT STATS, ABILITIES, LIMIT AND RISK v2.3
+    KH1FM EQUIPMENT STATS, ABILITIES, LIMIT AND RISK v2.4
     Target: KINGDOM HEARTS FINAL MIX.exe, Steam Global 1.0.0.2
     SHA-256: d790746245d26159f3ee0e1060e33b2fa2de06941850a4ac724f598722884bac
     Runtime: LuaBackendHook v1.9.1-hook / LuaEngine v5.0
@@ -28,20 +28,27 @@ LUAGUI_DESC = "One reversible Keyblade/accessory controller integrated with LIMI
       * Every equipped Keyblade/accessory row can add signed HP, MP, STR, DEF,
         Fire/Ice/Lightning/Dark resistance, temporary Sora abilities, LIMIT,
         and RISK. Repeated accessories count once per equipped copy.
+      * Keyblades also expose exact native CRIT_RATE, CRIT_BONUS_DAMAGE, and
+        RECOIL byte overrides. Nil preserves the current native value; zero is
+        a valid explicit override.
       * KH1FM ability bytes use the low seven bits for the ability ID and the
         high bit as the UNEQUIPPED flag. Equipment-granted abilities are
         therefore written as their raw ID (for example, MP Haste is 0x17),
         never ID+0x80 (MP Haste 0x97, present but unequipped).
-      * A v2 ownership ledger is migrated in place. Any ability v2 left in its
-        unequipped state is activated without stacking stats or losing the
-        byte that must be restored when the granting gear is removed.
+      * Equipment abilities always occupy new, previously empty temporary
+        entries. Sora's learned equipped and unequipped entries are never
+        activated, claimed, or removed. Multiple granting items create
+        multiple native copies, so stackable abilities really stack.
+      * V2-v2.3 ownership is migrated safely: any learned entry previously
+        claimed by the controller is restored before a new temporary copy is
+        created.
       * Native character-page refreshes are distinguished from values still
         owned by this script. If KH1 rebuilds HP/MP/STR/DEF, the rebuilt values
         become the new baseline and the configured equipment bonuses are
         reapplied instead of being accidentally cancelled.
       * Impossible v2/v2.1 ledgers (for example, expected MP minus the recorded
         owned bonus being negative) are rejected and repaired from the live
-        character page on the first v2.3 update.
+        character page on the first v2.4 update.
       * LIMIT changes the +10 confirmed block/parry/deflect event. Values below
         -10 make the defensive event remove LIMIT instead of generating it.
       * RISK changes the base 5 LIMIT lost on damage. Values below -5 invert the
@@ -84,7 +91,8 @@ LUAGUI_DESC = "One reversible Keyblade/accessory controller integrated with LIMI
         verified multiplier-to-clamp tail while this interface is live.
       * Does not touch NumericHudV1.9's private region or its HUD patches.
       * Owns only its reversible HP/MP/STR/DEF deltas, four live resistance
-        deltas, and temporary ability entries. Inventory and EXP are untouched.
+        deltas, three optional Keyblade-native bytes, and temporary ability
+        entries. Inventory and EXP are untouched.
       * LIMIT lives only in this script's private runtime region and sidecar.
 
     CURRENT SCOPE
@@ -134,6 +142,7 @@ local CONFIG = {
     INITIAL_EQUIPMENT_LOSS_MODIFIER = 0,
     UPDATE_EQUIPMENT_EVERY_N_FRAMES = 10,
     LOG_EQUIPMENT_CHANGES = true,
+    ENFORCE_RESISTANCES_EVERY_FRAME = true,
 
     PRESERVE_MISSING_HP = true,
     PRESERVE_MISSING_MP = true,
@@ -154,6 +163,13 @@ local CONFIG = {
           Direct additions to Sora's corresponding stat byte (final 0..255;
           Max HP remains at least 1).
 
+      CRIT_RATE / CRIT_BONUS_DAMAGE / RECOIL  (Keyblades only)
+          Exact native Keyblade-record byte overrides, each clamped to 0..255.
+          Use nil to preserve the game's current value. Zero is a real value.
+          CRIT_RATE uses KH1's native percentage byte (for reference, common
+          vanilla values include 20, 40, and 200); CRIT_BONUS_DAMAGE is the
+          critical-hit bonus attack value; RECOIL is the native recoil value.
+
       FIRE_RESISTANCE / ICE_RESISTANCE / LIGHTNING_RESISTANCE / DARK_RESISTANCE
           Percentage points of resistance. +20 means 20% less damage of that
           element; -20 means 20% more. These are live reversible modifiers and
@@ -168,9 +184,11 @@ local CONFIG = {
           Example: RISK=-3 loses 2; RISK=-5 loses 0; RISK=-8 gains 3.
 
       ABILITIES
-          Names from SORA_ABILITY_IDS below. The entry is equipped while at
-          least one granting item remains and is removed automatically when the
-          final granting Keyblade/accessory is unequipped.
+          Names from SORA_ABILITY_IDS below. Every granting item creates a new
+          temporary active copy in an empty ability-list entry. The controller
+          never equips or changes Sora's learned copy. Temporary copies are
+          removed automatically when their granting equipment is unequipped.
+          Repeating a name in one row deliberately grants multiple copies.
 
     Add ENABLED=false to any row you want the controller to ignore.
 ]]
@@ -181,6 +199,10 @@ local function GEAR(row)
     row.MP = row.MP or 0
     row.STR = row.STR or 0
     row.DEF = row.DEF or 0
+    -- Keyblade-only native overrides. Nil means "leave the native byte alone."
+    row.CRIT_RATE = row.CRIT_RATE
+    row.CRIT_BONUS_DAMAGE = row.CRIT_BONUS_DAMAGE
+    row.RECOIL = row.RECOIL
     row.FIRE_RESISTANCE = row.FIRE_RESISTANCE or 0
     row.ICE_RESISTANCE = row.ICE_RESISTANCE or 0
     row.LIGHTNING_RESISTANCE = row.LIGHTNING_RESISTANCE or 0
@@ -197,6 +219,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -207,6 +232,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -217,6 +245,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -227,6 +258,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -237,6 +271,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -247,6 +284,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -257,6 +297,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -267,6 +310,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -277,6 +323,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -287,6 +336,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -297,6 +349,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -307,6 +362,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -317,6 +375,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -327,6 +388,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -337,6 +401,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -346,9 +413,12 @@ local KEYBLADES = {
         HP = 160,
         MP = 90,
         STR = 70,
-        DEF = 10,
-        LIMIT = +5,
-        RISK = +1,
+        DEF = 70,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
+        LIMIT = -15,
+        RISK = -15,
         ICE_RESISTANCE = 100,
         ABILITIES = { "MP Haste" },
     }),
@@ -357,6 +427,9 @@ local KEYBLADES = {
         MP = 100,
         STR = 45,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -367,6 +440,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -377,6 +453,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -387,6 +466,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -397,6 +479,9 @@ local KEYBLADES = {
         MP = 20,
         STR = 4,
         DEF = 1,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -407,6 +492,9 @@ local KEYBLADES = {
         MP = -10,
         STR = 99,
         DEF = -10,
+        CRIT_RATE = nil,
+        CRIT_BONUS_DAMAGE = nil,
+        RECOIL = nil,
         LIMIT = -15,
         RISK = -15,
         ICE_RESISTANCE = 100,
@@ -415,16 +503,7 @@ local KEYBLADES = {
 }
 
 local ACCESSORIES = {
-    ["Protect Chain"] = GEAR({
-        HP = 1,
-        MP = 20,
-        STR = 4,
-        DEF = 1,
-        LIMIT = 100,
-        RISK = -90,
-        ICE_RESISTANCE = 100,
-        ABILITIES = { "MP Haste" },
-}),
+    ["Protect Chain"] = GEAR({}),
     ["Protera Chain"] = GEAR({}),
     ["Protega Chain"] = GEAR({}),
     ["Fire Ring"] = GEAR({}),
@@ -480,7 +559,7 @@ local ACCESSORIES = {
     ["Obsidian Ring"] = GEAR({}),
 }
 
-local PREFIX = "[EquipmentLimitRiskV2.3] "
+local PREFIX = "[EquipmentLimitRiskV2.4] "
 local MAX_LIMIT = 100
 local LIMIT_RESTORE_BASE = 10
 local LIMIT_LOSS_PER_HIT_BASE = 5
@@ -509,6 +588,17 @@ local PARRY_ANIMATIONS = {
 -- KHPCSpeedrunTools' six-float Sora resistance array. The resistance ordering
 -- is Physical, Fire, Blizzard/Ice, Thunder/Lightning, Dark, Special.
 local SORA_RESISTANCE_RVA = 0x2D5CB88
+-- First byte of the Steam Global Keyblade table. Each 0x58-byte record starts
+-- with STR, CRIT_RATE, CRIT_BONUS_DAMAGE, and RECOIL in that order.
+local KEYBLADE_TABLE_RVA = 0x2D2C268
+local KEYBLADE_FIRST_ID = 0x51
+local KEYBLADE_LAST_ID = 0x66
+local KEYBLADE_RECORD_SIZE = 0x58
+local KEYBLADE_NATIVE_OFFSET = {
+    crit_rate = 0x01,
+    crit_bonus_damage = 0x02,
+    recoil = 0x03,
+}
 local CHARACTER_OFFSET = {
     LEVEL = 0x00,
     CURRENT_HP = 0x01,
@@ -982,6 +1072,7 @@ local gear_runtime = {
         fire = nil, ice = nil, lightning = nil, dark = nil,
     },
     owned_abilities = {},
+    owned_weapon_bytes = {},
     desired_limit = 0,
     desired_risk = 0,
 }
@@ -1310,6 +1401,17 @@ do
         return 0
     end
 
+    local function optional_byte_field(row, upper, lower)
+        local value = row[upper]
+        if value == nil then
+            value = row[lower]
+        end
+        if value == nil then
+            return nil
+        end
+        return clamp(whole_number(value, 0), 0, 255)
+    end
+
     local function resolve_ability_id(value)
         if type(value) == "number" then
             local id = whole_number(value, -1)
@@ -1324,7 +1426,7 @@ do
         return nil
     end
 
-    local function compile_rows(rows, minimum_id, maximum_id)
+    local function compile_rows(rows, minimum_id, maximum_id, keyblades)
         local configured_name
         local row
         for configured_name, row in pairs(rows) do
@@ -1371,8 +1473,33 @@ do
                         risk = clamp(field_number(
                             row, "RISK", "risk"
                         ), -100, 100),
+                        crit_rate = nil,
+                        crit_bonus_damage = nil,
+                        recoil = nil,
                         abilities = {},
                     }
+                    if keyblades then
+                        compiled.crit_rate = optional_byte_field(
+                            row, "CRIT_RATE", "crit_rate"
+                        )
+                        compiled.crit_bonus_damage = optional_byte_field(
+                            row,
+                            "CRIT_BONUS_DAMAGE",
+                            "crit_bonus_damage"
+                        )
+                        compiled.recoil = optional_byte_field(
+                            row, "RECOIL", "recoil"
+                        )
+                    elseif row.CRIT_RATE ~= nil
+                        or row.crit_rate ~= nil
+                        or row.CRIT_BONUS_DAMAGE ~= nil
+                        or row.crit_bonus_damage ~= nil
+                        or row.RECOIL ~= nil
+                        or row.recoil ~= nil then
+                        log("CONFIG ERROR: CRIT_RATE, CRIT_BONUS_DAMAGE, "
+                            .. "and RECOIL are Keyblade-only; ignored on "
+                            .. compiled.name .. ".")
+                    end
                     local abilities = row.ABILITIES or row.abilities or {}
                     if type(abilities) ~= "table" then
                         log("CONFIG ERROR: abilities for "
@@ -1389,7 +1516,8 @@ do
                                 .. tostring(abilities[index]) .. "' on "
                                 .. compiled.name .. ".")
                         else
-                            compiled.abilities[ability_id] = true
+                            compiled.abilities[ability_id] =
+                                (compiled.abilities[ability_id] or 0) + 1
                         end
                     end
                     COMPILED_GEAR_BY_ID[id] = compiled
@@ -1420,8 +1548,8 @@ do
         end
         NORMALIZED_ABILITY_IDS[normalize_name("Counter Attack")] = 0x13
 
-        compile_rows(KEYBLADES, 0x51, 0x66)
-        compile_rows(ACCESSORIES, 0x11, 0x47)
+        compile_rows(KEYBLADES, 0x51, 0x66, true)
+        compile_rows(ACCESSORIES, 0x11, 0x47, false)
 
         local count = 0
         for id, _ in pairs(COMPILED_GEAR_BY_ID) do
@@ -1504,9 +1632,10 @@ do
             hp = 0, mp = 0, str = 0, def = 0,
             fire = 0, ice = 0, lightning = 0, dark = 0,
             limit = 0, risk = 0,
+            crit_rate = nil, crit_bonus_damage = nil, recoil = nil,
             abilities = {}, active_rows = {},
         }
-        local function add(id)
+        local function add(id, is_weapon)
             local row = COMPILED_GEAR_BY_ID[id]
             if row == nil then
                 return
@@ -1521,19 +1650,24 @@ do
             desired.dark = desired.dark + row.dark
             desired.limit = desired.limit + row.limit
             desired.risk = desired.risk + row.risk
+            if is_weapon then
+                desired.crit_rate = row.crit_rate
+                desired.crit_bonus_damage = row.crit_bonus_damage
+                desired.recoil = row.recoil
+            end
             desired.active_rows[#desired.active_rows + 1] = row.name
             local ability_id
-            for ability_id, enabled in pairs(row.abilities) do
-                if enabled then
+            for ability_id, copies in pairs(row.abilities) do
+                if copies > 0 then
                     desired.abilities[ability_id] =
-                        (desired.abilities[ability_id] or 0) + 1
+                        (desired.abilities[ability_id] or 0) + copies
                 end
             end
         end
-        add(equipment.weapon)
+        add(equipment.weapon, true)
         local index
         for index = 1, SORA_ACCESSORY_SLOT_CAPACITY do
-            add(equipment.accessories[index] or 0)
+            add(equipment.accessories[index] or 0, false)
         end
         desired.hp = clamp(desired.hp, -2040, 2040)
         desired.mp = clamp(desired.mp, -2040, 2040)
@@ -1748,19 +1882,20 @@ do
         return changed, nil
     end
 
-    local function find_ability_byte(byte)
+    local function find_empty_ability_slot()
         local slot
         for slot = 0, ABILITY_SLOT_CAPACITY - 1 do
             if safe_read_byte_relative(
                 SORA_CHARACTER_BASE_RVA + CHARACTER_OFFSET.ABILITIES + slot
-            ) == byte then
+            ) == 0 then
                 return slot
             end
         end
         return nil
     end
 
-    local function release_owned_ability(ability_id, ownership)
+    local function release_owned_ability(ownership)
+        local ability_id = ownership.ability_id
         local address = SORA_CHARACTER_BASE_RVA
             + CHARACTER_OFFSET.ABILITIES + ownership.slot
         local current = safe_read_byte_relative(address)
@@ -1787,108 +1922,201 @@ do
                 .. tostring(ownership.slot + 1)
                 .. " changed externally, so it was left untouched.")
         end
-        gear_runtime.owned_abilities[ability_id] = nil
+        gear_runtime.owned_abilities[ownership.slot] = nil
         return true, nil
     end
 
     local function update_abilities(desired_abilities)
         local changed = false
-        local owned_ids = {}
-        local ability_id
+        local owned_slots = {}
+        local slot
         local ownership
-        for ability_id, ownership in pairs(
+        for slot, ownership in pairs(
             gear_runtime.owned_abilities
         ) do
-            owned_ids[#owned_ids + 1] = ability_id
+            owned_slots[#owned_slots + 1] = slot
         end
+        table.sort(owned_slots)
+        local owned_counts = {}
         local index
-        for index = 1, #owned_ids do
-            ability_id = owned_ids[index]
-            ownership = gear_runtime.owned_abilities[ability_id]
+        for index = 1, #owned_slots do
+            slot = owned_slots[index]
+            ownership = gear_runtime.owned_abilities[slot]
             if ownership ~= nil then
                 local address = SORA_CHARACTER_BASE_RVA
                     + CHARACTER_OFFSET.ABILITIES + ownership.slot
                 local current = safe_read_byte_relative(address)
-                -- V2 reversed KH1FM's high-bit convention and wrote the
-                -- unequipped form (ID+0x80). Migrate an exact still-owned
-                -- byte to the active raw ID before normal ownership checks.
-                if desired_abilities[ability_id] ~= nil
-                    and current == ownership.expected
-                    and ownership.expected == ability_id + 0x80 then
-                    local ok, reason = safe_write_byte_relative(
-                        address, ability_id
-                    )
+                local ability_id = ownership.ability_id
+                -- Older v2-v2.3 ledgers could own a learned unequipped entry
+                -- (previous != 0) or the wrong high-bit byte. Release those
+                -- entries first; v2.4 will create a genuinely additional copy
+                -- only in a byte that was empty.
+                local legacy_claim = ownership.previous ~= 0
+                    or ownership.expected ~= ability_id
+                local wanted = desired_abilities[ability_id] or 0
+                local already_kept = owned_counts[ability_id] or 0
+                if current == nil then
+                    return false, "ability slot became unreadable"
+                elseif legacy_claim or current ~= ownership.expected
+                    or already_kept >= wanted then
+                    local ok, reason = release_owned_ability(ownership)
                     if not ok then return false, reason end
-                    ownership.expected = ability_id
-                    current = ability_id
                     changed = true
-                    if CONFIG.LOG_ABILITY_CHANGES then
-                        log("ABILITY MIGRATED AND ACTIVATED: "
+                    if legacy_claim and CONFIG.LOG_ABILITY_CHANGES then
+                        log("ABILITY MIGRATED: restored the previously claimed "
+                            .. "learned slot for "
                             .. (ABILITY_NAMES_BY_ID[ability_id]
                                 or tostring(ability_id))
-                            .. " changed from 0x"
-                            .. string.format("%02X", ability_id + 0x80)
-                            .. " to active byte 0x"
-                            .. string.format("%02X", ability_id) .. ".")
+                            .. "; a separate temporary copy will be used.")
                     end
-                end
-                if desired_abilities[ability_id] == nil
-                    or current ~= ownership.expected then
-                    local ok, reason = release_owned_ability(
-                        ability_id, ownership
-                    )
-                    if not ok then return false, reason end
-                    changed = true
+                else
+                    owned_counts[ability_id] = already_kept + 1
                 end
             end
         end
+        local ability_id
         for ability_id, count in pairs(desired_abilities) do
-            if count > 0
-                and gear_runtime.owned_abilities[ability_id] == nil then
-                -- In KH1FM the raw ID is equipped/active. Adding 0x80 marks
-                -- the same list entry unequipped.
-                local equipped = ability_id
-                local unequipped = ability_id + 0x80
-                if find_ability_byte(equipped) == nil then
-                    -- Prefer enabling Sora's existing unequipped copy. If he
-                    -- has not learned it, create a temporary entry in a free
-                    -- slot. Both paths restore the exact previous byte.
-                    local slot = find_ability_byte(unequipped)
-                    local previous = unequipped
-                    if slot == nil then
-                        slot = find_ability_byte(0)
-                        previous = 0
-                    end
-                    if slot == nil then
-                        log("ABILITY NOT GRANTED: no safe slot is available for "
-                            .. (ABILITY_NAMES_BY_ID[ability_id]
-                                or tostring(ability_id)) .. ".")
-                    else
-                        local ok, reason = safe_write_byte_relative(
-                            SORA_CHARACTER_BASE_RVA
-                                + CHARACTER_OFFSET.ABILITIES + slot,
-                            equipped
-                        )
-                        if not ok then return false, reason end
-                        gear_runtime.owned_abilities[ability_id] = {
-                            slot = slot,
-                            previous = previous,
-                            expected = equipped,
-                        }
-                        changed = true
-                        if CONFIG.LOG_ABILITY_CHANGES then
-                            log("ABILITY GRANTED: "
-                                .. (ABILITY_NAMES_BY_ID[ability_id]
-                                    or tostring(ability_id))
-                                .. " uses temporary slot "
-                                .. tostring(slot + 1)
-                                .. " and will restore 0x"
-                                .. string.format("%02X", previous)
-                                .. " when the last granting item is removed.")
-                        end
-                    end
+            local have = owned_counts[ability_id] or 0
+            while have < count do
+                slot = find_empty_ability_slot()
+                if slot == nil then
+                    log("ABILITY NOT GRANTED: no empty temporary entry is "
+                        .. "available for additional "
+                        .. (ABILITY_NAMES_BY_ID[ability_id]
+                            or tostring(ability_id))
+                        .. " copy " .. tostring(have + 1)
+                        .. " of " .. tostring(count) .. ".")
+                    break
+                end
+                local ok, reason = safe_write_byte_relative(
+                    SORA_CHARACTER_BASE_RVA
+                        + CHARACTER_OFFSET.ABILITIES + slot,
+                    ability_id
+                )
+                if not ok then return false, reason end
+                gear_runtime.owned_abilities[slot] = {
+                    ability_id = ability_id,
+                    slot = slot,
+                    previous = 0,
+                    expected = ability_id,
+                }
+                have = have + 1
+                owned_counts[ability_id] = have
+                changed = true
+                if CONFIG.LOG_ABILITY_CHANGES then
+                    log("ABILITY ADDED: additional "
+                        .. (ABILITY_NAMES_BY_ID[ability_id]
+                            or tostring(ability_id))
+                        .. " copy " .. tostring(have)
+                        .. " uses new temporary entry "
+                        .. tostring(slot + 1)
+                        .. "; Sora's learned copies were not changed.")
                 end
             end
+        end
+        return changed, nil
+    end
+
+    local function weapon_field_address(keyblade_id, field)
+        local offset = KEYBLADE_NATIVE_OFFSET[field]
+        if offset == nil or keyblade_id < KEYBLADE_FIRST_ID
+            or keyblade_id > KEYBLADE_LAST_ID then
+            return nil
+        end
+        return KEYBLADE_TABLE_RVA
+            + (keyblade_id - KEYBLADE_FIRST_ID) * KEYBLADE_RECORD_SIZE
+            + offset
+    end
+
+    local function release_owned_weapon_byte(address, ownership)
+        local current = safe_read_byte_relative(address)
+        if current == nil then
+            return false, "Keyblade native-stat byte became unreadable"
+        end
+        if current == ownership.expected then
+            local ok, reason = safe_write_byte_relative(
+                address, ownership.previous
+            )
+            if not ok then return false, reason end
+        else
+            log("KEYBLADE OWNERSHIP RELEASED: " .. ownership.field
+                .. " changed externally, so its byte was left untouched.")
+        end
+        gear_runtime.owned_weapon_bytes[address] = nil
+        return true, nil
+    end
+
+    local function update_weapon_stats(keyblade_id, desired)
+        local targets = {}
+        local field
+        for field, _ in pairs(KEYBLADE_NATIVE_OFFSET) do
+            local value = desired[field]
+            if value ~= nil then
+                local address = weapon_field_address(keyblade_id, field)
+                if address ~= nil then
+                    targets[address] = {
+                        field = field,
+                        keyblade_id = keyblade_id,
+                        value = value,
+                    }
+                end
+            end
+        end
+
+        local changed = false
+        local addresses = {}
+        local address
+        local ownership
+        local index
+        for address, ownership in pairs(
+            gear_runtime.owned_weapon_bytes
+        ) do
+            addresses[#addresses + 1] = address
+        end
+        for index = 1, #addresses do
+            address = addresses[index]
+            ownership = gear_runtime.owned_weapon_bytes[address]
+            local target = targets[address]
+            if ownership ~= nil and (target == nil
+                or target.value ~= ownership.expected) then
+                local ok, reason = release_owned_weapon_byte(
+                    address, ownership
+                )
+                if not ok then return false, reason end
+                changed = true
+            end
+        end
+
+        for address, target in pairs(targets) do
+            ownership = gear_runtime.owned_weapon_bytes[address]
+            if ownership == nil then
+                local current = safe_read_byte_relative(address)
+                if current == nil then
+                    return false, "Keyblade " .. target.field
+                        .. " byte is unreadable"
+                end
+                ownership = {
+                    address = address,
+                    field = target.field,
+                    keyblade_id = target.keyblade_id,
+                    previous = current,
+                    expected = target.value,
+                }
+                gear_runtime.owned_weapon_bytes[address] = ownership
+            end
+            local current = safe_read_byte_relative(address)
+            if current == nil then
+                return false, "Keyblade " .. target.field
+                    .. " byte is unreadable"
+            end
+            if current ~= target.value then
+                local ok, reason = safe_write_byte_relative(
+                    address, target.value
+                )
+                if not ok then return false, reason end
+                changed = true
+            end
+            ownership.expected = target.value
         end
         return changed, nil
     end
@@ -1914,7 +2142,7 @@ do
         if file == nil then
             return nil
         end
-        local state = { abilities = {} }
+        local state = { abilities = {}, weapon_bytes = {} }
         local line
         for line in file:lines() do
             local key, value = string.match(line, "^([%w_]+)=(.*)$")
@@ -1938,8 +2166,24 @@ do
                     value, "^(%d+),(%d+),(%d+),(%d+)$"
                 )
                 if ability ~= nil then
-                    state.abilities[tonumber(ability)] = {
+                    state.abilities[tonumber(slot)] = {
+                        ability_id = tonumber(ability),
                         slot = tonumber(slot),
+                        previous = tonumber(previous),
+                        expected = tonumber(expected),
+                    }
+                end
+            elseif key == "weapon" then
+                local address, field, keyblade_id, previous, expected =
+                    string.match(
+                        value,
+                        "^(%d+),([%w_]+),(%d+),(%d+),(%d+)$"
+                    )
+                if address ~= nil then
+                    state.weapon_bytes[tonumber(address)] = {
+                        address = tonumber(address),
+                        field = field,
+                        keyblade_id = tonumber(keyblade_id),
                         previous = tonumber(previous),
                         expected = tonumber(expected),
                     }
@@ -1962,7 +2206,7 @@ do
                 .. "; equipment reload protection is unavailable.")
             return false
         end
-        file:write("version=4\nactive=1\nbuild=STEAM_GL\n")
+        file:write("version=5\nactive=1\nbuild=STEAM_GL\n")
         file:write("signature=", tostring(gear_runtime.signature or ""), "\n")
         file:write("level=", tostring(gear_runtime.level or 0), "\n")
         file:write("experience=", tostring(gear_runtime.experience or 0), "\n")
@@ -1984,12 +2228,23 @@ do
                 string.format("%.9g",
                     gear_runtime.expected_resistance[element] or 0), "\n")
         end
-        local ability_id
-        for ability_id, ownership in pairs(
+        local slot
+        local ownership
+        for slot, ownership in pairs(
             gear_runtime.owned_abilities
         ) do
-            file:write("ability=", tostring(ability_id), ",",
+            file:write("ability=", tostring(ownership.ability_id), ",",
                 tostring(ownership.slot), ",",
+                tostring(ownership.previous), ",",
+                tostring(ownership.expected), "\n")
+        end
+        local address
+        for address, ownership in pairs(
+            gear_runtime.owned_weapon_bytes
+        ) do
+            file:write("weapon=", tostring(address), ",",
+                tostring(ownership.field), ",",
+                tostring(ownership.keyblade_id), ",",
                 tostring(ownership.previous), ",",
                 tostring(ownership.expected), "\n")
         end
@@ -2002,13 +2257,12 @@ do
         if path == nil then return end
         local file = io.open(path, "w")
         if file ~= nil then
-            file:write("version=4\nactive=0\n")
+            file:write("version=5\nactive=0\n")
             file:close()
         end
     end
 
-    local function state_matches(state, signature, stats, resistances,
-            level, experience)
+    local function state_matches(state, signature, stats)
         if state == nil or state.active ~= true
             or state.build ~= "STEAM_GL"
             or state.signature ~= signature
@@ -2020,7 +2274,7 @@ do
         end
         -- V2/v2.1 could keep an old applied delta after KH1 had already
         -- rebuilt the character page. Reject ledgers whose implied baseline
-        -- is impossible so the first v2.3 pass can adopt the live values and
+        -- is impossible so the first v2.4 pass can adopt the live values and
         -- apply the configured bonuses normally.
         local implied_hp = state.expected_hp
             - whole_number(state.hp_delta, 0)
@@ -2036,16 +2290,10 @@ do
             or implied_def < 0 or implied_def > 255 then
             return false
         end
-        local index
-        for index = 1, #ELEMENTS do
-            local element = ELEMENTS[index]
-            local expected = state["res_" .. element .. "_expected"]
-            if expected == nil
-                or math.abs(expected - resistances[element])
-                    > RESISTANCE_EPSILON then
-                return false
-            end
-        end
+        -- Do not reject the complete ledger merely because KH1 rebuilt its
+        -- live resistance array. Recover each resistance independently below;
+        -- otherwise a native resistance refresh could also make stats and
+        -- temporary abilities stack again after an F1 reload.
         return true
     end
 
@@ -2081,7 +2329,11 @@ do
         local index
         for index = 1, #ELEMENTS do
             local element = ELEMENTS[index]
-            if legacy then
+            local stored_expected =
+                tonumber(state["res_" .. element .. "_expected"])
+            if legacy or stored_expected == nil
+                or math.abs(current_resistances[element] - stored_expected)
+                    > RESISTANCE_EPSILON then
                 gear_runtime.applied_resistance[element] = 0
                 gear_runtime.expected_resistance[element] =
                     current_resistances[element]
@@ -2092,15 +2344,27 @@ do
                     tonumber(state["res_" .. element .. "_expected"])
             end
         end
-        local ability_id
+        local slot
         local ownership
-        for ability_id, ownership in pairs(state.abilities or {}) do
+        for slot, ownership in pairs(state.abilities or {}) do
             if ownership.slot >= 0 and ownership.slot < ABILITY_SLOT_CAPACITY
                 and safe_read_byte_relative(
                     SORA_CHARACTER_BASE_RVA
                         + CHARACTER_OFFSET.ABILITIES + ownership.slot
                 ) == ownership.expected then
-                gear_runtime.owned_abilities[ability_id] = ownership
+                gear_runtime.owned_abilities[ownership.slot] = ownership
+            end
+        end
+        local address
+        for address, ownership in pairs(state.weapon_bytes or {}) do
+            if address >= KEYBLADE_TABLE_RVA
+                and address < KEYBLADE_TABLE_RVA
+                    + (KEYBLADE_LAST_ID - KEYBLADE_FIRST_ID + 1)
+                        * KEYBLADE_RECORD_SIZE
+                and KEYBLADE_NATIVE_OFFSET[ownership.field] ~= nil
+                and safe_read_byte_relative(address)
+                    == ownership.expected then
+                gear_runtime.owned_weapon_bytes[address] = ownership
             end
         end
         if legacy then
@@ -2124,6 +2388,21 @@ do
             fire = nil, ice = nil, lightning = nil, dark = nil,
         }
         gear_runtime.owned_abilities = {}
+        -- The Keyblade table is process-global rather than save-local. Restore
+        -- any exact bytes still owned by the previous save before forgetting
+        -- their ledger.
+        local address
+        local ownership
+        for address, ownership in pairs(
+            gear_runtime.owned_weapon_bytes
+        ) do
+            local ok, reason = release_owned_weapon_byte(address, ownership)
+            if not ok then
+                log("KEYBLADE RESTORE WARNING DURING SAVE LOAD: "
+                    .. tostring(reason))
+            end
+        end
+        gear_runtime.owned_weapon_bytes = {}
         gear_runtime.signature = nil
         gear_runtime.level = level
         gear_runtime.experience = experience
@@ -2146,9 +2425,7 @@ do
         gear_runtime.signature = signature
         gear_runtime.level = level
         gear_runtime.experience = experience
-        if state_matches(
-            persisted, signature, stats, resistances, level, experience
-        ) then
+        if state_matches(persisted, signature, stats) then
             recover_state(persisted, resistances, false)
         elseif persisted ~= nil and persisted.active == true then
             log("STATE LEDGER IGNORED: it does not exactly match the "
@@ -2217,6 +2494,7 @@ do
         local stats_written = false
         local resistances_written = false
         local abilities_written = false
+        local weapon_written = false
         local reason
         if force or equipment_changed or stats_changed then
             stats_written, reason = apply_stats(desired, stats)
@@ -2229,6 +2507,10 @@ do
             if reason ~= nil then return false, nil, nil, reason end
         end
         abilities_written, reason = update_abilities(desired.abilities)
+        if reason ~= nil then return false, nil, nil, reason end
+        weapon_written, reason = update_weapon_stats(
+            equipment.weapon, desired
+        )
         if reason ~= nil then return false, nil, nil, reason end
 
         gear_runtime.signature = signature
@@ -2244,6 +2526,11 @@ do
                 .. " MP=" .. tostring(desired.mp)
                 .. " STR=" .. tostring(desired.str)
                 .. " DEF=" .. tostring(desired.def)
+                .. "; Keyblade native CRIT_RATE="
+                .. tostring(desired.crit_rate)
+                .. " CRIT_BONUS_DAMAGE="
+                .. tostring(desired.crit_bonus_damage)
+                .. " RECOIL=" .. tostring(desired.recoil)
                 .. "; resistance points Fire="
                 .. tostring(desired.fire)
                 .. " Ice=" .. tostring(desired.ice)
@@ -2252,13 +2539,55 @@ do
                 .. "; LIMIT=" .. string.format("%+d", desired.limit)
                 .. " RISK=" .. string.format("%+d", desired.risk)
                 .. ".")
+            log("LIVE RESISTANCE MULTIPLIERS: Fire="
+                .. string.format("%.3f",
+                    gear_runtime.expected_resistance.fire or 0)
+                .. " Ice=" .. string.format("%.3f",
+                    gear_runtime.expected_resistance.ice or 0)
+                .. " Lightning=" .. string.format("%.3f",
+                    gear_runtime.expected_resistance.lightning or 0)
+                .. " Dark=" .. string.format("%.3f",
+                    gear_runtime.expected_resistance.dark or 0)
+                .. " (0.000=immune, 1.000=normal).")
         end
         if force or equipment_changed or progress_changed
             or stats_written or resistances_written
-            or abilities_written then
+            or abilities_written or weapon_written then
             save_state()
         end
         return true, desired, signature, nil
+    end
+
+    function GEAR_CONTROLLER.enforce_resistances()
+        if not gear_runtime.initialized
+            or CONFIG.ENFORCE_RESISTANCES_EVERY_FRAME == false then
+            return true, nil
+        end
+        local index
+        for index = 1, #ELEMENTS do
+            local element = ELEMENTS[index]
+            local expected = gear_runtime.expected_resistance[element]
+            if expected ~= nil then
+                local current = safe_read_float_relative(
+                    SORA_RESISTANCE_RVA + RESISTANCE_OFFSET[element]
+                )
+                if current == nil then
+                    return false, element .. " resistance is unreadable"
+                end
+                if math.abs(current - expected) > RESISTANCE_EPSILON then
+                    local ok, reason = safe_write_float_relative(
+                        SORA_RESISTANCE_RVA + RESISTANCE_OFFSET[element],
+                        expected
+                    )
+                    if not ok then
+                        return false, element
+                            .. " resistance enforcement failed: "
+                            .. tostring(reason)
+                    end
+                end
+            end
+        end
+        return true, nil
     end
 
     function GEAR_CONTROLLER.cleanup()
@@ -2339,19 +2668,34 @@ do
             end
         end
 
-        local owned_ids = {}
-        local ability_id
+        local owned_slots = {}
+        local slot
         local ownership
-        for ability_id, ownership in pairs(
+        for slot, ownership in pairs(
             gear_runtime.owned_abilities
         ) do
-            owned_ids[#owned_ids + 1] = ability_id
+            owned_slots[#owned_slots + 1] = slot
         end
-        for index = 1, #owned_ids do
-            ability_id = owned_ids[index]
-            ownership = gear_runtime.owned_abilities[ability_id]
+        for index = 1, #owned_slots do
+            slot = owned_slots[index]
+            ownership = gear_runtime.owned_abilities[slot]
             if ownership ~= nil then
-                ok, reason = release_owned_ability(ability_id, ownership)
+                ok, reason = release_owned_ability(ownership)
+                if not ok then return false, reason end
+            end
+        end
+        local owned_addresses = {}
+        local address
+        for address, ownership in pairs(
+            gear_runtime.owned_weapon_bytes
+        ) do
+            owned_addresses[#owned_addresses + 1] = address
+        end
+        for index = 1, #owned_addresses do
+            address = owned_addresses[index]
+            ownership = gear_runtime.owned_weapon_bytes[address]
+            if ownership ~= nil then
+                ok, reason = release_owned_weapon_byte(address, ownership)
                 if not ok then return false, reason end
             end
         end
@@ -2361,7 +2705,7 @@ do
         }
         clear_state()
         log("CLEANUP COMPLETE: every still-owned equipment stat, "
-            .. "resistance, and ability change was restored.")
+            .. "resistance, Keyblade byte, and ability change was restored.")
         return true, nil
     end
 end
@@ -3442,6 +3786,14 @@ local function update_runtime()
                 .. tostring(equipment_reason))
             return
         end
+    end
+    local resistance_ok, resistance_reason =
+        GEAR_CONTROLLER.enforce_resistances()
+    if not resistance_ok then
+        runtime.stopped = true
+        log("STOPPED: live resistance enforcement failed: "
+            .. tostring(resistance_reason))
+        return
     end
 
     local limit = safe_read_int(LIMIT_VALUE_RVA)
