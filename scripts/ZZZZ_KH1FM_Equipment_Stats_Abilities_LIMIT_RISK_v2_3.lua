@@ -1,9 +1,9 @@
-LUAGUI_NAME = "KH1FM Equipment Stats, Abilities, LIMIT and RISK v2.2"
+LUAGUI_NAME = "KH1FM Equipment Stats, Abilities, LIMIT and RISK v2.3"
 LUAGUI_AUTH = "OpenAI"
 LUAGUI_DESC = "One reversible Keyblade/accessory controller integrated with LIMIT v1.6."
 
 --[[
-    KH1FM EQUIPMENT STATS, ABILITIES, LIMIT AND RISK v2.2
+    KH1FM EQUIPMENT STATS, ABILITIES, LIMIT AND RISK v2.3
     Target: KINGDOM HEARTS FINAL MIX.exe, Steam Global 1.0.0.2
     SHA-256: d790746245d26159f3ee0e1060e33b2fa2de06941850a4ac724f598722884bac
     Runtime: LuaBackendHook v1.9.1-hook / LuaEngine v5.0
@@ -41,7 +41,7 @@ LUAGUI_DESC = "One reversible Keyblade/accessory controller integrated with LIMI
         reapplied instead of being accidentally cancelled.
       * Impossible v2/v2.1 ledgers (for example, expected MP minus the recorded
         owned bonus being negative) are rejected and repaired from the live
-        character page on the first v2.2 update.
+        character page on the first v2.3 update.
       * LIMIT changes the +10 confirmed block/parry/deflect event. Values below
         -10 make the defensive event remove LIMIT instead of generating it.
       * RISK changes the base 5 LIMIT lost on damage. Values below -5 invert the
@@ -148,6 +148,7 @@ local CONFIG = {
     EDITABLE EQUIPMENT TABLES
 
     All numeric fields are signed and every equipped copy is counted.
+    Write positive values without a leading plus sign (use 100, not +100).
 
       HP / MP / STR / DEF
           Direct additions to Sora's corresponding stat byte (final 0..255;
@@ -207,10 +208,25 @@ local KEYBLADES = {
     ["Lionheart"]        = GEAR({}),
     ["Metal Chocobo"]    = GEAR({}),
     ["Oathkeeper"] = GEAR({
-        HP = 100, MP = 20, STR = 4, DEF = 1, LIMIT=-15, RISK =-15, ICE_RESISTANCE =+100
+        HP = 100,
+        MP = 20,
+        STR = 4,
+        DEF = 1,
+        LIMIT = -15,
+        RISK = -15,
+        ICE_RESISTANCE = 100,
         ABILITIES = { "MP Haste" },
     }),
-    ["Oblivion"]         = GEAR({}),
+    ["Oblivion"]         = GEAR({
+        HP = 300,
+        MP = 100,
+        STR = 45,
+        DEF = 1,
+        LIMIT = -15,
+        RISK = -15,
+        ICE_RESISTANCE = 100,
+        ABILITIES = { "MP Haste" },
+}),
     ["Lady Luck"]        = GEAR({}),
     ["Wishing Star"]     = GEAR({}),
     ["Ultima Weapon"]    = GEAR({}),
@@ -275,7 +291,7 @@ local ACCESSORIES = {
     ["Obsidian Ring"] = GEAR({}),
 }
 
-local PREFIX = "[EquipmentLimitRiskV2.2] "
+local PREFIX = "[EquipmentLimitRiskV2.3] "
 local MAX_LIMIT = 100
 local LIMIT_RESTORE_BASE = 10
 local LIMIT_LOSS_PER_HIT_BASE = 5
@@ -1815,7 +1831,7 @@ do
         end
         -- V2/v2.1 could keep an old applied delta after KH1 had already
         -- rebuilt the character page. Reject ledgers whose implied baseline
-        -- is impossible so the first v2.2 pass can adopt the live values and
+        -- is impossible so the first v2.3 pass can adopt the live values and
         -- apply the configured bonuses normally.
         local implied_hp = state.expected_hp
             - whole_number(state.hp_delta, 0)
