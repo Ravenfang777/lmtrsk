@@ -1,9 +1,9 @@
-LUAGUI_NAME = "KH1FM Equipment Stats, Abilities, LIMIT and RISK v2.1"
+LUAGUI_NAME = "KH1FM Equipment Stats, Abilities, LIMIT and RISK v2.2"
 LUAGUI_AUTH = "OpenAI"
 LUAGUI_DESC = "One reversible Keyblade/accessory controller integrated with LIMIT v1.6."
 
 --[[
-    KH1FM EQUIPMENT STATS, ABILITIES, LIMIT AND RISK v2.1
+    KH1FM EQUIPMENT STATS, ABILITIES, LIMIT AND RISK v2.2
     Target: KINGDOM HEARTS FINAL MIX.exe, Steam Global 1.0.0.2
     SHA-256: d790746245d26159f3ee0e1060e33b2fa2de06941850a4ac724f598722884bac
     Runtime: LuaBackendHook v1.9.1-hook / LuaEngine v5.0
@@ -35,6 +35,13 @@ LUAGUI_DESC = "One reversible Keyblade/accessory controller integrated with LIMI
       * A v2 ownership ledger is migrated in place. Any ability v2 left in its
         unequipped state is activated without stacking stats or losing the
         byte that must be restored when the granting gear is removed.
+      * Native character-page refreshes are distinguished from values still
+        owned by this script. If KH1 rebuilds HP/MP/STR/DEF, the rebuilt values
+        become the new baseline and the configured equipment bonuses are
+        reapplied instead of being accidentally cancelled.
+      * Impossible v2/v2.1 ledgers (for example, expected MP minus the recorded
+        owned bonus being negative) are rejected and repaired from the live
+        character page on the first v2.2 update.
       * LIMIT changes the +10 confirmed block/parry/deflect event. Values below
         -10 make the defensive event remove LIMIT instead of generating it.
       * RISK changes the base 5 LIMIT lost on damage. Values below -5 invert the
@@ -184,10 +191,7 @@ local function GEAR(row)
 end
 
 local KEYBLADES = {
-    ["Kingdom Key"]      = GEAR({
-        HP = 10, MP = 10, STR = 1, DEF = 1, LIMIT =+20, RISK=+20, ICE_RESISTANCE =+100,
-        ABILITIES = { "Counterattack" },
-}),
+    ["Kingdom Key"]      = GEAR({}),
     ["Dream Sword"]      = GEAR({}),
     ["Dream Shield (Sora)"] = GEAR({}),
     ["Dream Rod (Sora)"] = GEAR({}),
@@ -203,7 +207,7 @@ local KEYBLADES = {
     ["Lionheart"]        = GEAR({}),
     ["Metal Chocobo"]    = GEAR({}),
     ["Oathkeeper"] = GEAR({
-        HP = 20, MP = 20, STR = 4, DEF = 1, LIMIT =-20, RISK=-20, ICE_RESISTANCE =+100,
+        HP = 100, MP = 20, STR = 4, DEF = 1,
         ABILITIES = { "MP Haste" },
     }),
     ["Oblivion"]         = GEAR({}),
@@ -215,10 +219,7 @@ local KEYBLADES = {
 }
 
 local ACCESSORIES = {
-    ["Protect Chain"] = GEAR({
-        HP = 10, MP = 20, STR = 4, DEF = 10, LIMIT =+80, RISK=+20, FIRE_RESISTANCE =+100,
-        ABILITIES = { "MP Haste" },
-}),
+    ["Protect Chain"] = GEAR({}),
     ["Protera Chain"] = GEAR({}),
     ["Protega Chain"] = GEAR({}),
     ["Fire Ring"] = GEAR({}),
@@ -274,7 +275,7 @@ local ACCESSORIES = {
     ["Obsidian Ring"] = GEAR({}),
 }
 
-local PREFIX = "[EquipmentLimitRiskV2.1] "
+local PREFIX = "[EquipmentLimitRiskV2.2] "
 local MAX_LIMIT = 100
 local LIMIT_RESTORE_BASE = 10
 local LIMIT_LOSS_PER_HIT_BASE = 5
@@ -1402,11 +1403,27 @@ do
 
     local function apply_stats(desired, current)
         local old = gear_runtime.applied
+        local refreshed_fields = {}
+        local function owned_baseline(field)
+            local current_value = current[field]
+            local expected_value = gear_runtime.expected[field]
+            local owned_delta = old[field] or 0
+            if expected_value ~= nil and current_value == expected_value then
+                return current_value - owned_delta
+            end
+            if expected_value ~= nil and owned_delta ~= 0 then
+                refreshed_fields[#refreshed_fields + 1] = field
+            end
+            -- KH1 or another compatible controller rebuilt this byte. The
+            -- current value is already the new native/external baseline; do
+            -- not subtract our old delta from it a second time.
+            return current_value
+        end
         local baseline = {
-            hp = current.hp - (old.hp or 0),
-            mp = current.mp - (old.mp or 0),
-            str = current.str - (old.str or 0),
-            def = current.def - (old.def or 0),
+            hp = owned_baseline("hp"),
+            mp = owned_baseline("mp"),
+            str = owned_baseline("str"),
+            def = owned_baseline("def"),
         }
         local final = {
             hp = clamp(baseline.hp + desired.hp, 1, 255),
@@ -1479,6 +1496,15 @@ do
             def = final.def - baseline.def,
         }
         gear_runtime.expected = final
+        if #refreshed_fields > 0 and CONFIG.LOG_EQUIPMENT_CHANGES then
+            log("STAT PAGE REFRESH: adopted live "
+                .. table.concat(refreshed_fields, "/")
+                .. " as a new baseline and reapplied configured equipment "
+                .. "bonuses; HP=" .. tostring(final.hp)
+                .. " MP=" .. tostring(final.mp)
+                .. " STR=" .. tostring(final.str)
+                .. " DEF=" .. tostring(final.def) .. ".")
+        end
         return final.hp ~= current.hp or final.mp ~= current.mp
             or final.str ~= current.str or final.def ~= current.def, nil
     end
@@ -1731,7 +1757,7 @@ do
                 .. "; equipment reload protection is unavailable.")
             return false
         end
-        file:write("version=3\nactive=1\nbuild=STEAM_GL\n")
+        file:write("version=4\nactive=1\nbuild=STEAM_GL\n")
         file:write("signature=", tostring(gear_runtime.signature or ""), "\n")
         file:write("level=", tostring(gear_runtime.level or 0), "\n")
         file:write("experience=", tostring(gear_runtime.experience or 0), "\n")
@@ -1771,7 +1797,7 @@ do
         if path == nil then return end
         local file = io.open(path, "w")
         if file ~= nil then
-            file:write("version=3\nactive=0\n")
+            file:write("version=4\nactive=0\n")
             file:close()
         end
     end
@@ -1785,6 +1811,24 @@ do
             or state.expected_mp ~= stats.mp
             or state.expected_str ~= stats.str
             or state.expected_def ~= stats.def then
+            return false
+        end
+        -- V2/v2.1 could keep an old applied delta after KH1 had already
+        -- rebuilt the character page. Reject ledgers whose implied baseline
+        -- is impossible so the first v2.2 pass can adopt the live values and
+        -- apply the configured bonuses normally.
+        local implied_hp = state.expected_hp
+            - whole_number(state.hp_delta, 0)
+        local implied_mp = state.expected_mp
+            - whole_number(state.mp_delta, 0)
+        local implied_str = state.expected_str
+            - whole_number(state.str_delta, 0)
+        local implied_def = state.expected_def
+            - whole_number(state.def_delta, 0)
+        if implied_hp < 1 or implied_hp > 255
+            or implied_mp < 0 or implied_mp > 255
+            or implied_str < 0 or implied_str > 255
+            or implied_def < 0 or implied_def > 255 then
             return false
         end
         local index
@@ -1808,6 +1852,14 @@ do
             and state.expected_mp == stats.mp
             and state.expected_str == stats.str
             and state.expected_def == stats.def
+            and state.expected_hp - whole_number(state.hp_delta, 0) >= 1
+            and state.expected_hp - whole_number(state.hp_delta, 0) <= 255
+            and state.expected_mp - whole_number(state.mp_delta, 0) >= 0
+            and state.expected_mp - whole_number(state.mp_delta, 0) <= 255
+            and state.expected_str - whole_number(state.str_delta, 0) >= 0
+            and state.expected_str - whole_number(state.str_delta, 0) <= 255
+            and state.expected_def - whole_number(state.def_delta, 0) >= 0
+            and state.expected_def - whole_number(state.def_delta, 0) <= 255
     end
 
     local function recover_state(state, current_resistances, legacy)

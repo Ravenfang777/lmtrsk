@@ -1,8 +1,10 @@
-KH1FM Equipment Stats, Abilities, LIMIT and RISK v2.1
+KH1FM Equipment Stats, Abilities, LIMIT and RISK v2.2
 =====================================================
 
-This package contains one gameplay Lua. It replaces both:
+This package contains one gameplay Lua. It replaces:
 
+  ZZZZ_KH1FM_Equipment_Stats_Abilities_LIMIT_RISK_v2.lua
+  ZZZZ_KH1FM_Equipment_Stats_Abilities_LIMIT_RISK_v2_1.lua
   ZZZ_KH1FM_Equipment_Bonus_Controller_v1_1.lua
   ZZZ_KH1FM_LIMIT_System_v1_6_EnemyBoundsOrder.lua
 
@@ -11,50 +13,61 @@ Keep these compatible companions enabled:
   ZZZ_KH1FM_Smooth_Circular_HP_Custom_MP_LIMIT_HUD_v1_7.lua
   KHFM_EnemyConfig_v4_4_31_LIMITOrder.lua
 
-Edit KEYBLADES and ACCESSORIES near the top of the Lua. Every row supports:
+V2.2 stat correction
+--------------------
+
+V2.1 always subtracted its previously owned HP/MP/STR/DEF delta before
+reapplying the configured bonus. When KH1 had already rebuilt Sora's character
+page to native values, that subtraction cancelled the bonus instead.
+
+V2.2 distinguishes these two cases:
+
+  * Current value still equals the script's expected value:
+      remove the old owned delta, then apply the current equipment table.
+
+  * Current value differs because KH1 refreshed the character page:
+      accept the current value as the new baseline, then apply the current
+      equipment table without subtracting the old delta again.
+
+Impossible v2/v2.1 state ledgers are rejected automatically. If an older
+ledger is mathematically plausible but was already left in the cancelled
+state, unequip and re-equip the configured Keyblade once after v2.2 reports
+READY. That native equipment refresh lets v2.2 rebuild the correct baseline.
+
+Preserved Oathkeeper test row
+-----------------------------
+
+  HP=100, MP=20, STR=4, DEF=1, ABILITIES={ "MP Haste" }
+
+The raw MP Haste ID 0x17 remains the active form used by the separate MP
+Haste/Rage controller. V2.2 keeps the v2.1 ability ownership/migration logic.
+
+All editable rows support:
 
   HP, MP, STR, DEF,
   FIRE_RESISTANCE, ICE_RESISTANCE,
   LIGHTNING_RESISTANCE, DARK_RESISTANCE,
   LIMIT, RISK, ABILITIES
 
-Resistance fields use percentage points. +20 means 20% less elemental damage;
--20 means 20% more.
+Install/upgrade
+---------------
 
-LIMIT changes the base +10 block/parry/deflect event:
-
-  LIMIT = 5     generates 15
-  LIMIT = -10   generates 0
-  LIMIT = -15   removes 5
-
-RISK changes the base 5 points lost on a damaging hit:
-
-  RISK = 3      loses 8
-  RISK = -3     loses 2
-  RISK = -5     loses 0
-  RISK = -8     gains 3
-
-Abilities are granted only while at least one granting item remains equipped.
-An ability Sora already has equipped is never claimed or removed by this
-script. If Sora owns an unequipped copy, the gear temporarily equips that same
-entry and restores it to unequipped when the final granting item is removed.
-
-V2.1 fixes v2's reversed ability flag. KH1FM uses the raw ability ID as the
-equipped/active byte (MP Haste = 0x17); ID+0x80 is the unequipped byte
-(MP Haste = 0x97). V2.1 safely migrates v2's existing equipment state file, so
-do not delete KH1FM_Equipment_Stats_Abilities_LIMIT_RISK_v2_State.txt before
-the first v2.1 launch.
-
-Install/upgrade:
-
-  1. Disable v2 and the two replaced Lua files listed above.
+  1. Disable v2.1, v2, Equipment Bonus v1.1, and standalone LIMIT v1.6.
   2. Install this package.
-  3. Fully close KH1FM.
-  4. Use OpenKH Build and Run; do not use F1 for the first launch.
+  3. Do not delete KH1FM_Equipment_Stats_Abilities_LIMIT_RISK_v2_State.txt.
+  4. Fully close KH1FM.
+  5. Use OpenKH Build and Run; do not use F1 for the first launch.
+  6. With the save loaded, unequip and re-equip Oathkeeper once for a clean
+     v2.1-cancelled-state repair test.
 
 Expected console prefix:
 
-  [EquipmentLimitRiskV2.1]
+  [EquipmentLimitRiskV2.2]
+
+Expected Oathkeeper lines include:
+
+  EQUIPMENT: Oathkeeper
+  CUSTOM BONUS: HP=100 MP=20 STR=4 DEF=1
 
 To uninstall safely, set CONFIG.ENABLE=false, press F1 once while a save is
 loaded, save the game, then remove the Lua.
